@@ -1,0 +1,156 @@
+
+# -------------------------------------------------------------------
+# Define secrets & networks up-front
+# -------------------------------------------------------------------
+secrets:
+  mysql_root_password:
+    file: ./secrets/mysql_root_password.txt
+  wp_db_password:
+    file: ./secrets/wp_db_password.txt
+  wp_auth_key:
+    file: ./secrets/wp_auth_key.txt
+  wp_secure_auth_key:
+    file: ./secrets/wp_secure_auth_key.txt
+  wp_logged_in_key:
+    file: ./secrets/wp_logged_in_key.txt
+  wp_nonce_key:
+    file: ./secrets/wp_nonce_key.txt
+  wp_auth_salt:
+    file: ./secrets/wp_auth_salt.txt
+  wp_secure_auth_salt:
+    file: ./secrets/wp_secure_auth_salt.txt
+  wp_logged_in_salt:
+    file: ./secrets/wp_logged_in_salt.txt
+  wp_nonce_salt:
+    file: ./secrets/wp_nonce_salt.txt
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+
+volumes:
+  wordpress_data:
+  db_data:
+
+services:
+  wordpress:
+    image: wordpress:php8.4-apache@sha256:8c81f97017c38c78c718d18b7ee55fc80805ce9bd31c48b1c7e9efb7a84ebae4
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:80"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD_FILE: /run/secrets/wp_db_password
+
+      WORDPRESS_AUTH_KEY_FILE:        /run/secrets/wp_auth_key
+      WORDPRESS_SECURE_AUTH_KEY_FILE: /run/secrets/wp_secure_auth_key
+      WORDPRESS_LOGGED_IN_KEY_FILE:   /run/secrets/wp_logged_in_key
+      WORDPRESS_NONCE_KEY_FILE:       /run/secrets/wp_nonce_key
+
+      WORDPRESS_AUTH_SALT_FILE:        /run/secrets/wp_auth_salt
+      WORDPRESS_SECURE_AUTH_SALT_FILE: /run/secrets/wp_secure_auth_salt
+      WORDPRESS_LOGGED_IN_SALT_FILE:   /run/secrets/wp_logged_in_salt
+      WORDPRESS_NONCE_SALT_FILE:       /run/secrets/wp_nonce_salt
+    secrets:
+      - wp_db_password
+      - wp_auth_key
+      - wp_secure_auth_key
+      - wp_logged_in_key
+      - wp_nonce_key
+      - wp_auth_salt
+      - wp_secure_auth_salt
+      - wp_logged_in_salt
+      - wp_nonce_salt
+    volumes:
+      - wordpress_data:/var/www/html:rw
+    networks:
+      - frontend
+      - backend
+    labels:
+      - com.example.wpcompose.autoheal=true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  db:
+    image: mysql:8.0.42-oraclelinux9@sha256:98914997054781e301d675233d76f393168ea67002424c5291072e5593350e1b
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD_FILE: /run/secrets/wp_db_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+    secrets:
+      - wp_db_password
+      - mysql_root_password
+    volumes:
+      - db_data:/var/lib/mysql:rw
+    networks:
+      - backend
+    labels:
+      - com.example.wpcompose.autoheal=true
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command:
+      [
+        "--default-authentication-plugin=mysql_native_password",
+        "--sql-mode=STRICT_ALL_TABLES"
+      ]
+
+  nginx:
+    image: nginx:stable
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certbot/www:/var/www/certbot
+      - ./certbot/conf:/etc/letsencrypt
+    depends_on:
+      wordpress:
+        condition: service_healthy
+    networks:
+      - frontend
+      - backend
+    restart: unless-stopped
+    labels:
+      - com.example.wpcompose.autoheal=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - ./certbot/www:/var/www/certbot
+      - ./certbot/conf:/etc/letsencrypt
+    networks:
+      - frontend
+    command: >
+      certonly
+      --webroot --webroot-path=/var/www/certbot
+      --email <your-email@example.com> --agree-tos --no-eff-email
+      -d <your_domain.com>
+
+  autoheal:
+    image: willfarrell/autoheal@sha256:ae56e40ac95abeb282da289c84d84c7737fabe68e139b1ac5e4933643bbc5729
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=com.example.wpcompose.autoheal
